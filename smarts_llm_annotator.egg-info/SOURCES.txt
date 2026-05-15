@@ -1,0 +1,12 @@
+setup.py
+scripts/__init__.py
+scripts/get_pubchem_compound_data.py
+scripts/llm_utils.py
+scripts/pubchem_lookup.py
+scripts/smarts_annotation_pipeline.py
+smarts_llm_annotator.egg-info/PKG-INFO
+smarts_llm_annotator.egg-info/SOURCES.txt
+smarts_llm_annotator.egg-info/dependency_links.txt
+smarts_llm_annotator.egg-info/top_level.txt
+tests/__init__.py
+tests/test_1.py
