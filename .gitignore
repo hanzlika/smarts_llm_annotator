@@ -1,2 +1,13 @@
-data/raw/
+__pycache__/
+*.pyc
+*.egg-info/
+.ipynb_checkpoints/
+.idea/
 .env
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+
+data/raw/
