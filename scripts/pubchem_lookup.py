@@ -19,25 +19,24 @@ import pytz
 
 from datetime import datetime, time as dtime, timedelta
 from datetime import timezone
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Optional
 
 
 import pandas as pd
 import requests
 from tqdm.auto import tqdm
 from urllib.parse import quote, urlencode
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
-# ----------------------------------------------------------------------
-# ─── Logging & NCBI contact information
-# ----------------------------------------------------------------------
+# Logging & NCBI contact information
 log = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
-# Fill these in (or export the env‑vars before launching Python)
+# Fill these in (or export the env-vars before launching Python)
 NCBI_EMAIL: str = os.getenv("NCBI_EMAIL", "your.email@domain.org")
 NCBI_TOOL:  str = os.getenv("NCBI_TOOL", "pubchem_lookup")
 
@@ -46,9 +45,7 @@ if not NCBI_EMAIL or not NCBI_TOOL:
         "You must provide both NCBI_EMAIL and NCBI_TOOL (via env vars or constants)."
     )
 
-# ----------------------------------------------------------------------
-# ─── Disclaimer (required by NCBI)
-# ----------------------------------------------------------------------
+# Disclaimer (required by NCBI)
 NCBI_DISCLAIMER = """
 NCBI Disclaimer:
 Data retrieved from PubChem are provided by the National Center for
@@ -59,9 +56,7 @@ material.
 """
 log.info(NCBI_DISCLAIMER.strip())
 
-# ----------------------------------------------------------------------
-# ─── Rate limiter (thread‑safe) – default max 3 QPS (NCBI policy)
-# ----------------------------------------------------------------------
+# Rate limiter (thread-safe) - default max 3 QPS (NCBI policy)
 class QPSRateLimiter:
     """Enforces a maximum number of requests per second across threads."""
 
@@ -83,11 +78,9 @@ class QPSRateLimiter:
             self._last_ts = time.time()
 
 
-# ----------------------------------------------------------------------
-# ─── Night‑only / weekend enforcement (Eastern Time)
-# ----------------------------------------------------------------------
+# Night-only / weekend enforcement (Eastern Time)
 def _is_allowed_window() -> bool:
-    """True if we are inside the NCBI‑approved 21pm – 5am ET window (or weekend)."""
+    """True if we are inside the NCBI-approved 21pm - 5am ET window (or weekend)."""
     now_utc = datetime.now(timezone.utc)
 
     eastern = pytz.timezone("America/New_York")
@@ -97,7 +90,7 @@ def _is_allowed_window() -> bool:
     if now_et.weekday() >= 5:
         return True
 
-    # Weekday night window: 21:00 – 05:00 ET
+    # Weekday night window: 21:00 - 05:00 ET
     start = dtime(21, 0)
     end = dtime(5, 0)
     if start <= now_et.time() or now_et.time() < end:
@@ -137,7 +130,7 @@ def _sleep_until_allowed() -> None:
     seconds = (target_utc - now_utc).total_seconds()
     seconds = max(seconds, 0)
     log.info(
-        "Outside allowed window – sleeping %.0fs (≈%s)…",
+        "Outside allowed window - sleeping %.0fs (~%s)...",
         seconds,
         str(timedelta(seconds=int(seconds))),
     )
@@ -146,7 +139,7 @@ def _sleep_until_allowed() -> None:
 
 def ensure_allowed_window(ignore_time_window: bool = False) -> None:
     """
-    Block until the NCBI‑approved time window is active,
+    Block until the NCBI-approved time window is active,
     unless ``ignore_time_window`` is True (useful for debugging).
     """
     if ignore_time_window:
@@ -155,9 +148,7 @@ def ensure_allowed_window(ignore_time_window: bool = False) -> None:
         _sleep_until_allowed()
 
 
-# ----------------------------------------------------------------------
-# ─── Robust GET with exponential back‑off (used for every HTTP call)
-# ----------------------------------------------------------------------
+# Robust GET with exponential back-off (used for every HTTP call)
 def _robust_get(
     url: str,
     *,
@@ -182,9 +173,7 @@ def _robust_get(
     raise RuntimeError("Unreachable in _robust_get")  # pragma: no cover
 
 
-# ----------------------------------------------------------------------
-# ─── Fast‑substructure (SMARTS → CID) query
-# ----------------------------------------------------------------------
+# Fast-substructure (SMARTS -> CID) query
 def get_pubchem_matching_cids(
     smarts_pattern: str,
     *,
@@ -211,23 +200,15 @@ def get_pubchem_matching_cids(
 
     url = f"{base}/{encoded}/cids/TXT?{urlencode(params)}"
 
-    # ------------------------------------------------------------------
-    # Respect the night‑only window (only once per job is fine)
-    # ------------------------------------------------------------------
-    #ensure_allowed_window()
-
     resp = _robust_get(url, timeout=timeout)
     raw = resp.text.strip().splitlines()
     if not raw or raw == [""]:
         return []
 
-    cids = [int(tok) for tok in raw if tok.isdigit()]
-    return cids
+    return [int(tok) for tok in raw if tok.isdigit()]
 
 
-# ----------------------------------------------------------------------
-# ─── Worker for the ThreadPoolExecutor (SMARTS → CID)
-# ----------------------------------------------------------------------
+# Worker for the ThreadPoolExecutor (SMARTS -> CID)
 def _cid_worker(
     smarts: str,
     limit: Optional[int],
@@ -237,18 +218,15 @@ def _cid_worker(
 ) -> Tuple[str, List[int]]:
     if rate_limiter is not None:
         rate_limiter.wait()
-    cids = get_pubchem_matching_cids(
+    return smarts, get_pubchem_matching_cids(
         smarts,
         limit=limit,
         strip_hydrogen=strip_hydrogen,
         timeout=timeout,
     )
-    return smarts, cids
 
 
-# ----------------------------------------------------------------------
-# ─── Public parallel lookup (returns original DF + CID list)
-# ----------------------------------------------------------------------
+# Public parallel lookup (returns original DF + CID list)
 def parallel_cid_lookup(
     df: pd.DataFrame,
     smarts_col: str = "smarts",
@@ -265,47 +243,34 @@ def parallel_cid_lookup(
     Parallel lookup of PubChem CIDs for every SMARTS string in ``df[smarts_col]``.
 
     Returns ``df`` with two added columns:
-        * ``cids``          – list of matching PubChem CIDs
+        * ``cids``          - list of matching PubChem CIDs
     """
-    smarts_series = df[smarts_col].astype(str)
-    n_items = len(smarts_series)
-
     # One global limiter for the whole job (covers both API endpoints)
     rate_limiter = QPSRateLimiter(max_qps) if max_qps is not None else None
 
-    # Respect the night‑only window *once* before launching threads
-    print(ignore_time_window)
-    #ensure_allowed_window(ignore_time_window=ignore_time_window)
-
-    results: Dict[str, List[int]] = {}
+    # Respect the night-only window *once* before launching threads
+    ensure_allowed_window(ignore_time_window=ignore_time_window)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                _cid_worker,
-                smarts,
-                limit,
-                strip_hydrogen,
-                timeout,
-                rate_limiter,
-            ): smarts
-            for smarts in smarts_series
-        }
-
-        iterator = as_completed(futures)
+        worker = partial(
+            _cid_worker,
+            limit=limit,
+            strip_hydrogen=strip_hydrogen,
+            timeout=timeout,
+            rate_limiter=rate_limiter,
+        )
+        iterator = executor.map(worker, df[smarts_col].astype(str))
         if show_progress:
             iterator = tqdm(
-                iterator, total=n_items, desc="SMARTS → CID", unit="smarts"
+                iterator, total=len(df), desc="SMARTS -> CID", unit="smarts"
             )
 
-        for fut in iterator:
-            smarts, cids = fut.result()
-            results[smarts] = cids
+        # each item is the (smarts, cids) tuple _cid_worker returns
+        out_df = df.copy()
+        out_df["cids"] = out_df[smarts_col].map(dict(iterator)).apply(
+            lambda x: x if isinstance(x, list) else []
+        )
 
-    out_df = df.copy()
-    out_df["cids"] = out_df[smarts_col].map(results).apply(
-        lambda x: x if isinstance(x, list) else []
-    )
     return out_df
 
 
@@ -319,7 +284,7 @@ def _fetch_properties_batch(
 ) -> List[dict]:
     """
     Request PubChem PropertyTable for ``batch`` (max 1000CIDs per request
-    – PubChem will happily accept longer lists, but 1000 keeps the URL short).
+    - PubChem will happily accept longer lists, but 1000 keeps the URL short).
     Returns a list of property dictionaries.
     """
     # Build the query string with the mandatory NCBI parameters
@@ -351,12 +316,12 @@ def get_compound_properties(
 
     Parameters
     ----------
-    cids           – list of integer PubChem CIDs (duplicates are ignored)
+    cids           - list of integer PubChem CIDs (duplicates are ignored)
     properties     - list of strings corresponding to compound properties to be fetched
-    top_n          – number of lowest‑MW hits to return (default 10)
-    batch_size     – how many CIDs to request per HTTP call (default 1000)
-    timeout, max_qps – same semantics as the rest of the module
-    ignore_time_window – set True only for quick debugging; production should keep it False
+    top_n          - number of lowest-MW hits to return (default 10)
+    batch_size     - how many CIDs to request per HTTP call (default 1000)
+    timeout, max_qps - same semantics as the rest of the module
+    ignore_time_window - set True only for quick debugging; production should keep it False
     """
     if not cids:
         return pd.DataFrame(columns=["CID"] + properties)
@@ -366,7 +331,7 @@ def get_compound_properties(
 
     rate_limiter = QPSRateLimiter(max_qps)
 
-    # Respect the night‑only window *once* before the first batch
+    # Respect the night-only window *once* before the first batch
     ensure_allowed_window(ignore_time_window=ignore_time_window)
 
     all_props: List[dict] = []
@@ -375,12 +340,11 @@ def get_compound_properties(
         batch = cids[i : i + batch_size]
         rate_limiter.wait()
         try:
-            batch_props = _fetch_properties_batch(
+            all_props.extend(_fetch_properties_batch(
                 batch, properties=properties, timeout=timeout, email=email, tool=tool
-            )
-            all_props.extend(batch_props)
-        except Exception as exc:  # pragma: no cover – network errors are rare in tests
-            log.warning("Failed to fetch properties for batch %s‑%s: %s", i, i + batch_size, exc)
+            ))
+        except Exception as exc:  # pragma: no cover - network errors are rare in tests
+            log.warning("Failed to fetch properties for batch %s-%s: %s", i, i + batch_size, exc)
 
     cleaned = []
     for p in all_props:
@@ -396,7 +360,14 @@ def get_compound_properties(
     return pd.DataFrame(cleaned)
 
 
-def get_lowest_mw_iupac_names(df, compounds_properties, n=10):
+def get_lowest_mw_iupac_names(
+    df,
+    compounds_properties,
+    n=10,
+    cid_col="CID",
+    mass_col="MolecularWeight",
+    iupac_col="IUPACName",
+):
     best_iupac_lists = []
     import ast
 
@@ -406,26 +377,24 @@ def get_lowest_mw_iupac_names(df, compounds_properties, n=10):
         if isinstance(cids_list, str):
             try:
                 cids_list = ast.literal_eval(cids_list)
-            except ValueError:
+            except (ValueError, SyntaxError):
                 cids_list = []
 
         if not cids_list:
             best_iupac_lists.append([])
             continue
 
-        subset = compounds_properties[compounds_properties['CID'].isin(cids_list)]
-        subset_sorted = subset.sort_values('Mass', ascending=True)
+        subset = compounds_properties[compounds_properties[cid_col].isin(cids_list)]
+        subset_sorted = subset.sort_values(mass_col, ascending=True)
 
         # Get top_n IUPAC names
-        top_names = subset_sorted['IUPAC'].head(n).to_list()
+        top_names = subset_sorted[iupac_col].head(n).to_list()
         best_iupac_lists.append(top_names)
 
-    return df['best_IUPAC_names']
+    return best_iupac_lists
 
 
-# ----------------------------------------------------------------------
-# ─── Convenience wrapper: SMARTS → smallest‑MW compounds (single call)
-# ----------------------------------------------------------------------
+# Convenience wrapper: SMARTS -> smallest-MW compounds (single call)
 def lookup_smallest_mw_from_smarts(
     df: pd.DataFrame,
     smarts_col: str = "smarts",
@@ -440,7 +409,7 @@ def lookup_smallest_mw_from_smarts(
     ignore_time_window: bool = False,
 ) -> pd.DataFrame:
 
-    # SMARTS → CID (parallel, with rate-limiting)
+    # SMARTS -> CID (parallel, with rate-limiting)
     smarts_to_cids_df = parallel_cid_lookup(
         df,
         smarts_col=smarts_col,
@@ -470,9 +439,7 @@ def lookup_smallest_mw_from_smarts(
     return smarts_to_cids_df
 
 
-# ----------------------------------------------------------------------
-# ─── Simple demo if file is executed directly
-# ----------------------------------------------------------------------
+# Simple demo if file is executed directly
 if __name__ == "__main__":
     demo = pd.DataFrame(
         {
@@ -484,14 +451,14 @@ if __name__ == "__main__":
             ]
         }
     )
-    log.info("Running demo – one‑off lookup")
+    log.info("Running demo - one-off lookup")
     out = lookup_smallest_mw_from_smarts(
         demo,
         top_n=5,
         max_qps=3,                 # stay under NCBI limit
         ignore_time_window=True,   # set False for a real production run
     )
-    print("\n=== SMARTS → CID summary =====================")
-    print(out["smart_match_summary"])
-    print("\n=== Top‑5 lowest‑MW compounds ===============")
-    print(out["lowest_mw_hits"])
+    print("\n=== SMARTS -> CIDs =====================")
+    print(out[["smarts", "cids"]])
+    print("\n=== Top-5 lowest-MW IUPAC names ===============")
+    print(out[["smarts", "best_IUPAC_names"]])
