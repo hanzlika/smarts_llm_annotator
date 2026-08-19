@@ -1,16 +1,87 @@
+# smarts-llm-annotator
+
+Generates concise, human-readable names for SMARTS substructure filters
+using an LLM, grounded with two kinds of context:
+
+- **PubChem lookups**: for each SMARTS pattern, the smallest matching
+  compounds (by molecular weight) are fetched from PubChem and their IUPAC
+  names are given to the LLM as inspiration.
+- **Few-shot examples**: the most structurally similar patterns (by Morgan
+  fingerprint / Tanimoto similarity) from a labeled reference set
+  (`data/smarts_examples.csv`) are included as naming examples.
+
 ## Setup
 
-Create a `.env` file in the project root:
+Requires Python >=3.11 and [Poetry](https://python-poetry.org/).
+
+```bash
+poetry install
+cp .env.example .env   # then fill in your API key
+```
+
+`.env` must define:
 
 ```env
 API_BASE=https://chat.ai.e-infra.cz/api
 API_KEY=your_api_key_here
 ```
 
-Or copy the example:
+## Project layout
+
+```
+scripts/
+  pubchem_lookup.py           PubChem SMARTS->CID and property lookups (rate-limited,
+                               respects NCBI's requested off-peak window)
+  prompting.py                Few-shot example selection + prompt building
+  chemspace_utils.py          Chemspace-label -> SMARTS preprocessing
+  llm_utils.py                Async batched LLM calls over a DataFrame
+  smarts_annotation_pipeline.py  Ties the above into one end-to-end pipeline
+                               (see its module docstring for the step-by-step breakdown)
+notebooks/
+  chemspace_annotation.ipynb  Runs the pipeline on data/chemspaceweb_2023_structures.csv
+  screenx_annotation.ipynb    Runs the pipeline on a ScreenX cluster export (path in-notebook)
+data/                         Reference/example CSVs used by the pipeline and its tests
+tests/                        Unit tests (no network calls)
+```
+
+## Running the pipeline
+
+From a notebook (see `notebooks/chemspace_annotation.ipynb` for a full example):
+
+```python
+out_df = await smarts_annotation_pipeline.run(
+    "data/my_input.csv",
+    smarts_col="smarts",
+    out_path="data/output.csv",
+    model_name="gpt-oss-120b",  # any model your API_BASE serves
+)
+```
+
+Or from the command line:
 
 ```bash
-cp .env.example .env
+poetry run python -m scripts.smarts_annotation_pipeline data/my_input.csv smarts --out-path data/output.csv --model gpt-oss-120b
+```
+
+`model_name`/`--model` can be any model name your `API_BASE` endpoint
+serves. If omitted, it's resolved automatically: in an interactive
+terminal you'll be prompted to choose from the models available through
+your API key; otherwise the first one listed is used. To see what's
+available yourself:
+
+```python
+await llm_utils.list_available_models()
+```
+
+By default, PubChem calls respect NCBI's requested off-peak window
+(weekday 9pm-5am ET, or anytime on weekends). Pass `--ignore-time-window`
+(CLI) or `ignore_time_window=True` (Python) to skip that, e.g. for quick
+local testing.
+
+## Tests
+
+```bash
+poetry run pytest
 ```
 
 ## Roadmap
