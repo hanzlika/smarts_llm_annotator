@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 chemspace_utils.py
 
