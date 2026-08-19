@@ -1,4 +1,4 @@
-from scripts.name_formatting import fix_unbalanced_leading_paren, normalize_name
+from smarts_llm_annotator.name_formatting import fix_unbalanced_leading_paren, normalize_name
 
 
 def test_lowercases():

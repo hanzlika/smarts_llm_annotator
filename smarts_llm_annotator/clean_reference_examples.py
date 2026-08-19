@@ -2,9 +2,9 @@
 clean_reference_examples.py
 
 One-off maintenance script that cleans data/smarts_examples.csv (the
-few-shot reference set used by scripts/prompting.py) so its descriptions
+few-shot reference set used by smarts_llm_annotator/prompting.py) so its descriptions
 already comply with the display format enforced on LLM output -- see
-scripts/name_formatting.py. Re-run this after adding new raw reference
+smarts_llm_annotator/name_formatting.py. Re-run this after adding new raw reference
 rows.
 
 Fixes applied:
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.name_formatting import fix_unbalanced_leading_paren, normalize_name
+from smarts_llm_annotator.name_formatting import fix_unbalanced_leading_paren, normalize_name
 
 REFERENCE_PATH = Path(__file__).resolve().parents[1] / "data" / "smarts_examples.csv"
 

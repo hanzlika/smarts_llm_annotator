@@ -2,7 +2,7 @@ import pandas as pd
 from rdkit import Chem
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
-from scripts.prompting import (
+from smarts_llm_annotator.prompting import (
     build_prompt,
     get_top_n_most_similar_smarts_description_examples,
     get_top_n_most_similar_smarts_description_examples_wrapper,

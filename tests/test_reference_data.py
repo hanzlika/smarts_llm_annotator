@@ -1,13 +1,13 @@
 """
-Regression tests guarding the cleanup done by scripts/clean_reference_examples.py
+Regression tests guarding the cleanup done by smarts_llm_annotator/clean_reference_examples.py
 -- catches new raw data being merged into data/smarts_examples.csv without
 being run through the cleaner.
 """
 
 import pandas as pd
 
-from scripts.name_formatting import normalize_name
-from scripts.prompting import DEFAULT_SMARTS_EXAMPLES_PATH
+from smarts_llm_annotator.name_formatting import normalize_name
+from smarts_llm_annotator.prompting import DEFAULT_SMARTS_EXAMPLES_PATH
 
 
 def _reference_df():

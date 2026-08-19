@@ -1,6 +1,6 @@
 import pandas as pd
 
-from scripts.pubchem_lookup import get_lowest_mw_iupac_names
+from smarts_llm_annotator.pubchem_lookup import get_lowest_mw_iupac_names
 
 
 def _compounds_properties():

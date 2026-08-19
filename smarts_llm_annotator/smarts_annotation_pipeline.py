@@ -8,9 +8,10 @@ End-to-end pipeline:
 4. similar labeled examples
 5. LLM-generated human-readable name
 
-Assumes the input CSV has already been preprocessed into a column of
-valid SMARTS strings (see e.g. chemspace_utils.chemspace_label_to_smarts
-for one such preprocessing step).
+Assumes the input has already been preprocessed into a column of valid
+SMARTS strings -- vendor-specific label formats need their own
+preprocessing step first (e.g. converting a proprietary label syntax
+into SMARTS) before calling run().
 """
 
 import argparse
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts import llm_utils, name_formatting, prompting, pubchem_lookup
+from smarts_llm_annotator import llm_utils, name_formatting, prompting, pubchem_lookup
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
@@ -27,15 +28,21 @@ DEFAULT_OUT_PATH = DATA_DIR / "output.csv"
 
 
 async def run(
-    in_path,
+    in_path_or_df,
     smarts_col,
     out_path=DEFAULT_OUT_PATH,
     model_name=None,
     ignore_time_window=False,
 ):
     """
-    Run the full annotation pipeline over the SMARTS in in_path[smarts_col]
-    and write the results (including LLM-generated names) to out_path.
+    Run the full annotation pipeline over the SMARTS in
+    in_path_or_df[smarts_col] and write the results (including
+    LLM-generated names) to out_path.
+
+    in_path_or_df may be a CSV path, or an already-loaded DataFrame (e.g.
+    pulled straight from a database query) -- useful when the caller
+    already has the data in memory and a CSV round-trip would be pure
+    overhead.
 
     PubChem lookups respect NCBI's requested off-peak window (weekday
     9pm-5am ET, or anytime on weekends) unless ignore_time_window=True.
@@ -46,7 +53,10 @@ async def run(
     """
     model_name = await llm_utils.resolve_model_name(model_name)
 
-    df = pd.read_csv(in_path)[[smarts_col]].dropna()
+    if isinstance(in_path_or_df, pd.DataFrame):
+        df = in_path_or_df[[smarts_col]].dropna()
+    else:
+        df = pd.read_csv(in_path_or_df)[[smarts_col]].dropna()
 
     # PubChem CID lookup + smallest-MW IUPAC names, via the live API
     df = pubchem_lookup.lookup_smallest_mw_from_smarts(

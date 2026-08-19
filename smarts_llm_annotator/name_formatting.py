@@ -2,7 +2,7 @@
 name_formatting.py
 
 Canonical display formatting for SMARTS names. Used both to clean the
-few-shot reference examples (scripts/prompting.py) and to sanitize
+few-shot reference examples (smarts_llm_annotator/prompting.py) and to sanitize
 LLM-generated names before they're written out / displayed. Sharing one
 implementation means the examples the LLM is shown already comply with
 the same rules enforced on its own output, instead of competing signals.

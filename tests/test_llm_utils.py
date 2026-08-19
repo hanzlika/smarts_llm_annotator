@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from scripts import llm_utils
+from smarts_llm_annotator import llm_utils
 
 
 def _models_response(ids):
