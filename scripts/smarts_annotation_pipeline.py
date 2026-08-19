@@ -1,164 +1,111 @@
-# Assuming that the user had preprocessed the data into a dataframe with a column of valid smarts
-import pandas as pd
-from scripts import pubchem_lookup, get_pubchem_compound_data, llm_utils
+"""
+smarts_annotation_pipeline.py
+
+End-to-end pipeline:
+1. SMARTS
+2. PubChem CID lookup
+3. smallest-MW IUPAC names
+4. similar labeled examples
+5. LLM-generated human-readable name
+
+Assumes the input CSV has already been preprocessed into a column of
+valid SMARTS strings (see e.g. chemspace_utils.chemspace_label_to_smarts
+for one such preprocessing step).
+"""
+
+import argparse
+import asyncio
 from pathlib import Path
-from rdkit import Chem
-from rdkit.Chem import DataStructs
-from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
-from tqdm import tqdm 
-import ast
 
-ROOT_DIR = Path(__file__).resolve().parents[0]
+import pandas as pd
+
+from scripts import llm_utils, name_formatting, prompting, pubchem_lookup
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
-COMPOUNDS_PROPERTIES_PATH = DATA_DIR / 'CIDs_to_mass_iupac.csv'
-SMARTS_EXAMPLES_PATH = DATA_DIR / 'smarts_examples.csv'
-DEFAULT_OUT_PATH = DATA_DIR / 'output.csv'
+DEFAULT_OUT_PATH = DATA_DIR / "output.csv"
 
-def run(in_path, smarts_col, out_path=DEFAULT_OUT_PATH, use_local=True, ignore_time_window=False):
-    # ensure local data is downloaded and ready if we're going to use it
-    if use_local:
-        get_pubchem_compound_data.ensure_file_present()
-        
+
+async def run(
+    in_path,
+    smarts_col,
+    out_path=DEFAULT_OUT_PATH,
+    model_name=None,
+    ignore_time_window=False,
+):
+    """
+    Run the full annotation pipeline over the SMARTS in in_path[smarts_col]
+    and write the results (including LLM-generated names) to out_path.
+
+    PubChem lookups respect NCBI's requested off-peak window (weekday
+    9pm-5am ET, or anytime on weekends) unless ignore_time_window=True.
+
+    If model_name isn't given, it's resolved from the API's available
+    models: prompted for interactively in a terminal, otherwise defaulted
+    to the first model listed (see llm_utils.resolve_model_name).
+    """
+    model_name = await llm_utils.resolve_model_name(model_name)
+
     df = pd.read_csv(in_path)[[smarts_col]].dropna()
-    
-    #1 get pubchem matching of smarts
-    df = pubchem_lookup.parallel_cid_lookup(
+
+    # PubChem CID lookup + smallest-MW IUPAC names, via the live API
+    df = pubchem_lookup.lookup_smallest_mw_from_smarts(
         df,
-        smarts_col,
-        limit=1000,
+        smarts_col=smarts_col,
+        limit_per_smarts=1000,
         max_workers=8,
         show_progress=True,
-        ignore_time_window=ignore_time_window
+        ignore_time_window=ignore_time_window,
     )
-    
-    # 2 get n smallest MW compounds out of that list
-    all_cids = set([int(cid) for cids_list in df['cids'] for cid in eval(cids_list)])
 
-    # a) using stored pubchem data
-    if use_local:
-        compounds_properties = pd.read_csv(COMPOUNDS_PROPERTIES_PATH)
+    # most similar labeled SMARTS examples, for few-shot prompting
+    df["similar_examples"] = prompting.get_top_n_most_similar_smarts_description_examples_wrapper(
+        df, smarts_col, n=10
+    )
 
-        # limit to cids were interested in
-        compounds_properties = compounds_properties[compounds_properties['CID'].isin(all_cids)].copy()
-
-        df['best_IUPAC_names'] = pubchem_lookup.get_lowest_mw_iupac_names(df, compounds_properties)
-
-    else:
-        return
-    # b) using pubchem api
-    # not implemented yet
-
-    #3 get n most similar SMARTS
-    df['similar_examples'] = get_top_n_most_similar_smarts_description_examples_wrapper(df, 'inferred_smarts', n=10)
-
-    #4 compile into prompts with few-shot examples
+    # compile prompts
     df["prompt"] = df.apply(
-        lambda row: build_prompt_safe(
-            row["best_IUPAC_names"],
-            row["similar_examples"],
-            row[smarts_col]
+        lambda row: prompting.build_prompt(
+            row["best_IUPAC_names"], row["similar_examples"], row[smarts_col]
         ),
-        axis=1
+        axis=1,
     )
 
-    async def run_llm_on_df_async(in_df):
-        out_df =  await llm_utils.run_llm_on_dataframe(in_df, prompt_column='prompt')
-        out_df[[smarts_col, 'best_IUPAC_names', 'llm_output']].to_csv(out_path, index=False)
+    # LLM call
+    out_df = await llm_utils.run_llm_on_dataframe(df, model_name=model_name, prompt_column="prompt")
 
-    #5 async call of the LLM
-    run_llm_on_df_async(df)
+    # normalize the generated name to this project's display format (lowercase,
+    # ASCII, no catalog-style disambiguation suffixes) -- see name_formatting.py.
+    # Left untouched on error rows, where llm_output is an "Error: ..." message.
+    is_ok = out_df["llm_status"] == "ok"
+    out_df.loc[is_ok, "llm_output"] = out_df.loc[is_ok, "llm_output"].apply(name_formatting.normalize_name)
 
-
-def get_top_n_most_similar_smarts_description_examples_wrapper(df, smarts_col, n=10):
-    ref = pd.read_csv(SMARTS_EXAMPLES_PATH)
-    
-    # Initialize Morgan fingerprint generator
-    morgan_gen = GetMorganGenerator(radius=2, fpSize=1024)
-    
-    def get_fps_from_list(smarts_list):
-        fps = []
-        for s in smarts_list:
-            mol = Chem.MolFromSmarts(s)
-            
-            if mol is not None:
-                try:
-                    Chem.SanitizeMol(mol)
-                    fp = morgan_gen.GetFingerprint(mol)
-                    fps.append(fp)
-                except ValueError:
-                    fps.append(None)
-                    print(f"Fingerprint generation failed for SMARTS: {s}")
-            else:
-                fps.append(None)
-                print(f"Invalid SMARTS: {s}")
-        return fps
-
-    ref['fps'] = get_fps_from_list(ref['smarts'].to_list())
-    ref.dropna(inplace=True)
-    smarts_fps = get_fps_from_list(df[smarts_col].to_list())
-
-    smarts_examples = []
-    for query_smarts in tqdm(smarts_fps, desc="Finding most similar smarts examples"):
-        examples, are_random = get_top_n_most_similar_smarts_description_examples(query_smarts, ref, n=n)
-        smarts_examples.append(examples)
-
-    return smarts_examples
+    out_df[[smarts_col, "best_IUPAC_names", "llm_output"]].to_csv(out_path, index=False)
+    return out_df
 
 
-def get_top_n_most_similar_smarts_description_examples(query_fp, ref_df, n):
-    # Compute similarity for each fingerprint
-    if query_fp is None:
-        return list(ref_df.sample(2 * n)
-                          [['smarts', 'cleaned_description']]
-                          .itertuples(index=False, name=None)), True
-    similarities = []
-    for idx, row in ref_df.iterrows():
-        fp2 = row['fps']
-        if fp2 is not None:
-            sim = DataStructs.TanimotoSimilarity(query_fp, fp2)
-            similarities.append(((row['smarts'], row['cleaned_description']), sim))  # store SMARTS with similarity
-    
-    # Sort by similarity descending
-    similarities.sort(key=lambda x: x[1], reverse=True)
-    
-    # Get top n SMARTS-description pairs
-    return [s for s, sim in similarities[:n]], False
-
-
-def build_prompt_safe(best_iupac_names, similar_examples, input_smarts):
-    shared_base_instructions = """You are an LLM that converts SMARTS substructure filters into concise, human-readable names.
-    - **Input**: A SMARTS string.
-    - **Output**: A lowercase name with words separated by spaces.
-    - The name should help molecular biologists/chemists instantly recognize the chemical feature (e.g., 'amide bond').
-    - Return **ONLY the name** - no prefixes, suffixes, explanations, or formatting.
-    """
-    
-    matching_compounds_example_prompt_base = "IUPAC names of smallest matching compounds (by atom count). Use for inspiration but note:\n- SMARTS patterns are often simpler than matching compounds\n- NEVER directly use compound names; identify general features instead:\n"
-    
-    similar_examples_prompt_base = "\nExamples of similar SMARTS-to-name conversions. Use to maintain consistent naming conventions:\n"
-    # Safely parse inputs
-    try:
-        iupac_list = ast.literal_eval(best_iupac_names)
-        examples_list = ast.literal_eval(similar_examples)
-    except (SyntaxError, ValueError):
-        # Fallback to empty lists on error
-        iupac_list = []
-        examples_list = []
-    
-    # Truncate long lists (e.g., max 5 items)
-    matching_compounds_prompt = (
-        matching_compounds_example_prompt_base + '\n'.join(iupac_list[:5]) 
-        if iupac_list else ''
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description="Annotate SMARTS patterns with LLM-generated human-readable names."
     )
-    
-    similar_examples_prompt = similar_examples_prompt_base + ''.join(
-        f"Input: {smarts} -> Output: {name}\n" 
-        for smarts, name in examples_list[:5]  # Truncate examples
+    parser.add_argument("in_path", help="Input CSV containing a column of SMARTS patterns.")
+    parser.add_argument("smarts_col", help="Name of the column containing SMARTS patterns.")
+    parser.add_argument("--out-path", default=str(DEFAULT_OUT_PATH), help="Output CSV path.")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model to use for naming. If omitted, prompts you to choose from "
+        "the models available through your API key (or picks the first one "
+        "when not running in an interactive terminal).",
     )
-    
-    return (
-        shared_base_instructions + 
-        matching_compounds_prompt + 
-        similar_examples_prompt + 
-        f"Now you fill in the final one:\nInput: {input_smarts} -> Output:"
+    parser.add_argument(
+        "--ignore-time-window",
+        action="store_true",
+        help="Skip NCBI's requested off-peak (9pm-5am ET / weekend) window for PubChem calls.",
     )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = _parse_args()
+    asyncio.run(run(args.in_path, args.smarts_col, args.out_path, args.model, args.ignore_time_window))
