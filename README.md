@@ -10,6 +10,11 @@ using an LLM, grounded with two kinds of context:
   fingerprint / Tanimoto similarity) from a labeled reference set
   (`data/smarts_examples.csv`) are included as naming examples.
 
+This is a general-purpose library, meant to be installed as a dependency by
+projects with their own SMARTS data (e.g. a vendor-specific label format
+that needs its own preprocessing step first, or an existing database of
+structure filters) rather than used standalone.
+
 ## Setup
 
 Requires Python >=3.11 and [Poetry](https://python-poetry.org/).
@@ -29,28 +34,25 @@ API_KEY=your_api_key_here
 ## Project layout
 
 ```
-scripts/
+smarts_llm_annotator/
   pubchem_lookup.py           PubChem SMARTS->CID and property lookups (rate-limited,
                                respects NCBI's requested off-peak window)
   prompting.py                Few-shot example selection + prompt building
-  chemspace_utils.py          Chemspace-label -> SMARTS preprocessing
-  llm_utils.py                Async batched LLM calls over a DataFrame
+  name_formatting.py          Canonical display-name formatting/cleanup
+  llm_utils.py                Async batched LLM calls over a DataFrame, model discovery
   smarts_annotation_pipeline.py  Ties the above into one end-to-end pipeline
                                (see its module docstring for the step-by-step breakdown)
-notebooks/
-  chemspace_annotation.ipynb  Runs the pipeline on data/chemspaceweb_2023_structures.csv
-  screenx_annotation.ipynb    Runs the pipeline on a ScreenX cluster export (path in-notebook)
 data/                         Reference/example CSVs used by the pipeline and its tests
 tests/                        Unit tests (no network calls)
 ```
 
 ## Running the pipeline
 
-From a notebook (see `notebooks/chemspace_annotation.ipynb` for a full example):
-
 ```python
+from smarts_llm_annotator import smarts_annotation_pipeline
+
 out_df = await smarts_annotation_pipeline.run(
-    "data/my_input.csv",
+    "data/my_input.csv",  # a CSV path, or an already-loaded DataFrame
     smarts_col="smarts",
     out_path="data/output.csv",
     model_name="gpt-oss-120b",  # any model your API_BASE serves
@@ -60,7 +62,7 @@ out_df = await smarts_annotation_pipeline.run(
 Or from the command line:
 
 ```bash
-poetry run python -m scripts.smarts_annotation_pipeline data/my_input.csv smarts --out-path data/output.csv --model gpt-oss-120b
+poetry run python -m smarts_llm_annotator.smarts_annotation_pipeline data/my_input.csv smarts --out-path data/output.csv --model gpt-oss-120b
 ```
 
 `model_name`/`--model` can be any model name your `API_BASE` endpoint
