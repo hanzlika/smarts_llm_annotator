@@ -17,10 +17,10 @@ structure filters) rather than used standalone.
 
 ## Setup
 
-Requires Python >=3.11 and [Poetry](https://python-poetry.org/).
+Requires Python >=3.11 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-poetry install
+uv sync
 cp .env.example .env   # then fill in your API key
 ```
 
@@ -62,7 +62,7 @@ out_df = await smarts_annotation_pipeline.run(
 Or from the command line:
 
 ```bash
-poetry run python -m smarts_llm_annotator.smarts_annotation_pipeline data/my_input.csv smarts --out-path data/output.csv --model gpt-oss-120b
+uv run python -m smarts_llm_annotator.smarts_annotation_pipeline data/my_input.csv smarts --out-path data/output.csv --model gpt-oss-120b
 ```
 
 `model_name`/`--model` can be any model name your `API_BASE` endpoint
@@ -83,7 +83,7 @@ local testing.
 ## Tests
 
 ```bash
-poetry run pytest
+uv run pytest
 ```
 
 ## Roadmap
