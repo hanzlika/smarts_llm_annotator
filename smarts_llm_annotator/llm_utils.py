@@ -142,3 +142,8 @@ async def run_llm_on_dataframe(
         tqdm.write(f"Response: {answer}\n")
 
     return out_df
+
+
+if __name__ == "__main__":
+    for model in asyncio.run(list_available_models()):
+        print(model)

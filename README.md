@@ -72,6 +72,12 @@ terminal you'll be prompted to choose from the models available through
 your API key; otherwise the first one listed is used. To see what's
 available yourself:
 
+```bash
+uv run python -m smarts_llm_annotator.llm_utils
+```
+
+or from Python:
+
 ```python
 import asyncio
 from smarts_llm_annotator import llm_utils
