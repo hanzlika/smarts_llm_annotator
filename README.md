@@ -49,14 +49,15 @@ tests/                        Unit tests (no network calls)
 ## Running the pipeline
 
 ```python
+import asyncio
 from smarts_llm_annotator import smarts_annotation_pipeline
 
-out_df = await smarts_annotation_pipeline.run(
+out_df = asyncio.run(smarts_annotation_pipeline.run(
     "data/my_input.csv",  # a CSV path, or an already-loaded DataFrame
     smarts_col="smarts",
     out_path="data/output.csv",
     model_name="gpt-oss-120b",  # any model your API_BASE serves
-)
+))
 ```
 
 Or from the command line:
@@ -72,7 +73,10 @@ your API key; otherwise the first one listed is used. To see what's
 available yourself:
 
 ```python
-await llm_utils.list_available_models()
+import asyncio
+from smarts_llm_annotator import llm_utils
+
+asyncio.run(llm_utils.list_available_models())
 ```
 
 By default, PubChem calls respect NCBI's requested off-peak window
