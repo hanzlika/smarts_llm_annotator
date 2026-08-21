@@ -27,7 +27,7 @@ cp .env.example .env   # then fill in your API key
 `.env` must define:
 
 ```env
-API_BASE=https://chat.ai.e-infra.cz/api
+API_BASE=https://llm.ai.e-infra.cz/v1
 API_KEY=your_api_key_here
 ```
 
